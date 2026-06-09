@@ -1,62 +1,49 @@
 import torch
+import numpy as np
 
-# IEEE Standard values for PZT-5H
-C44 = 2.30e10
-E33 = 23.3
-EPS33 = 1.30e-8
+c0_ref, e0_ref, eps0_ref = 2.3e10, 23.3, 1.30e-8
+k0_sq = (e0_ref**2) / (c0_ref * eps0_ref)
 
-# Dimensionless Ratios
-C11_BAR = 12.6e10 / C44
-C13_BAR = 8.41e10 / C44
-C33_BAR = 11.7e10 / C44
-E31_BAR = -6.5 / E33
-EPS11_BAR = 1.50e-8 / EPS33
-K0_SQ = (E33 ** 2) / (C44 * EPS33)
+c11, c13, c33, c44 = 12.6/2.3, 5.3/2.3, 11.7/2.3, 1.0
+eps11, eps33 = 1.503/1.300, 1.0
+true_e31, true_e33 = -6.5/23.3, 23.3/23.3
+true_e15 = 17.0 / 23.3
 
-def grad(outputs, inputs):
-    return torch.autograd.grad(
-        outputs, inputs,
-        grad_outputs=torch.ones_like(outputs),
-        create_graph=True,
-        retain_graph=True
-    )[0]
-
-def manufactured_solutions(x1, x3, t):
-    D_bc = x1 * (1.0 - x1) * x3 * (1.0 - x3)
-    topology = 0.1 * D_bc * (t ** 2)
+def manufactured_wavefield(x_tensor):
+    x, z, t = x_tensor[:, 0:1], x_tensor[:, 1:2], x_tensor[:, 2:3]
+    spatial_mode_x = torch.sin(2 * np.pi * x)
+    spatial_mode_z = torch.sin(2 * np.pi * z)
     
-    u1_mms = topology * torch.sin(torch.pi * x1) * torch.cos(torch.pi * x3)
-    u3_mms = topology * torch.cos(torch.pi * x1) * torch.sin(torch.pi * x3)
-    phi_mms = topology * torch.sin(torch.pi * x1) * torch.sin(torch.pi * x3)
+    u1_mms = 0.08 * (t**2) * spatial_mode_x * spatial_mode_z
+    u3_mms = 0.10 * (t**2) * spatial_mode_x * spatial_mode_z
+    phi_mms = 0.12 * (t**2) * spatial_mode_x * spatial_mode_z
     
     return u1_mms, u3_mms, phi_mms
 
-def compute_pde_residuals(u1, u3, phi, x1, x3, t, e15_bar):
-    u1_t = grad(u1, t)
-    u1_tt = grad(u1_t, t)
-    u1_1 = grad(u1, x1)
-    u1_11 = grad(u1_1, x1)
-    u1_3 = grad(u1, x3)
-    u1_33 = grad(u1_3, x3)
-    u1_13 = grad(u1_1, x3)
-
-    u3_t = grad(u3, t)
-    u3_tt = grad(u3_t, t)
-    u3_1 = grad(u3, x1)
-    u3_11 = grad(u3_1, x1)
-    u3_3 = grad(u3, x3)
-    u3_33 = grad(u3_3, x3)
-    u3_13 = grad(u3_1, x3)
-
-    phi_1 = grad(phi, x1)
-    phi_11 = grad(phi_1, x1)
-    phi_3 = grad(phi, x3)
-    phi_33 = grad(phi_3, x3)
-    phi_13 = grad(phi_1, x3)
-
-    # Dimensionally stabilized PDE system
-    res_1 = (u1_tt) - (C11_BAR * u1_11 + u1_33 + (C13_BAR + 1.0) * u3_13 + K0_SQ * (E31_BAR + e15_bar) * phi_13)
-    res_3 = (u3_tt) - (u3_11 + C33_BAR * u3_33 + (C13_BAR + 1.0) * u1_13 + K0_SQ * e15_bar * phi_11 + K0_SQ * phi_33)
-    res_phi = (e15_bar + E31_BAR) * u1_13 + e15_bar * u3_11 + u3_33 - EPS11_BAR * phi_11 - phi_33
-
-    return res_1, res_3, res_phi
+def generate_mms_forcing(x_tensor):
+    x_g = x_tensor.clone().detach().requires_grad_(True)
+    u1, u3, phi = manufactured_wavefield(x_g)
+    
+    u1_x, u1_z, u1_t = torch.autograd.grad(u1.sum(), x_g, create_graph=True)[0].split(1, dim=1)
+    u3_x, u3_z, u3_t = torch.autograd.grad(u3.sum(), x_g, create_graph=True)[0].split(1, dim=1)
+    phi_x, phi_z, _ = torch.autograd.grad(phi.sum(), x_g, create_graph=True)[0].split(1, dim=1)
+    
+    u1_xx = torch.autograd.grad(u1_x.sum(), x_g, create_graph=True)[0][:, 0:1]
+    u1_zz = torch.autograd.grad(u1_z.sum(), x_g, create_graph=True)[0][:, 1:2]
+    u1_xz = torch.autograd.grad(u1_x.sum(), x_g, create_graph=True)[0][:, 1:2]
+    u1_tt = torch.autograd.grad(u1_t.sum(), x_g, create_graph=True)[0][:, 2:3]
+    
+    u3_xx = torch.autograd.grad(u3_x.sum(), x_g, create_graph=True)[0][:, 0:1]
+    u3_zz = torch.autograd.grad(u3_z.sum(), x_g, create_graph=True)[0][:, 1:2]
+    u3_xz = torch.autograd.grad(u3_x.sum(), x_g, create_graph=True)[0][:, 1:2]
+    u3_tt = torch.autograd.grad(u3_t.sum(), x_g, create_graph=True)[0][:, 2:3]
+    
+    phi_xx = torch.autograd.grad(phi_x.sum(), x_g, create_graph=True)[0][:, 0:1]
+    phi_zz = torch.autograd.grad(phi_z.sum(), x_g, create_graph=True)[0][:, 1:2]
+    phi_xz = torch.autograd.grad(phi_x.sum(), x_g, create_graph=True)[0][:, 1:2]
+    
+    f1 = u1_tt - (c11*u1_xx + c44*u1_zz + (c13+c44)*u3_xz + k0_sq*(true_e31+true_e15)*phi_xz)
+    f3 = u3_tt - (c44*u3_xx + c33*u3_zz + (c13+c44)*u1_xz + k0_sq*true_e15*phi_xx + k0_sq*true_e33*phi_zz)
+    f_phi = (true_e15+true_e31)*u1_xz + true_e15*u3_xx + true_e33*u3_zz - eps11*phi_xx - eps33*phi_zz
+    
+    return f1.detach(), f3.detach(), f_phi.detach()
