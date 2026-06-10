@@ -4,41 +4,29 @@ This script contains the core architecture, explicitly enforcing your novel $\ma
 import torch
 import torch.nn as nn
 
-class ConstrainedMultiphysicsPINN(nn.Module):
-    def __init__(self, layers=[3] + [150]*8 + [3]):
+class PiezoInversePINN(nn.Module):
+    def __init__(self):
         super().__init__()
-        self.net = self._build_network(layers)
-        
-        # Trainable parameter initialized with 86% magnitude error per the manuscript
+        self.net = nn.Sequential(
+            nn.Linear(3, 150), nn.Tanh(),
+            nn.Linear(150, 150), nn.Tanh(),
+            nn.Linear(150, 150), nn.Tanh(),
+            nn.Linear(150, 150), nn.Tanh(),
+            nn.Linear(150, 150), nn.Tanh(),
+            nn.Linear(150, 150), nn.Tanh(),
+            nn.Linear(150, 150), nn.Tanh(),
+            nn.Linear(150, 3)
+        )
         self.e15_pred = nn.Parameter(torch.tensor([0.10], dtype=torch.float32))
-
-    def _build_network(self, layers):
-        modules = []
-        for i in range(len(layers) - 2):
-            modules.append(nn.Linear(layers[i], layers[i+1]))
-            modules.append(nn.Tanh())
-        modules.append(nn.Linear(layers[-2], layers[-1]))
         
-        # Glorot uniform initialization
-        for m in modules:
+        for m in self.modules():
             if isinstance(m, nn.Linear):
                 nn.init.xavier_uniform_(m.weight)
-                nn.init.zeros_(m.bias)
-                
-        return nn.Sequential(*modules)
 
-    def forward(self, x1, x3, t):
-        inputs = torch.cat([x1, x3, t], dim=1)
-        raw_out = self.net(inputs)
+    def forward(self, x_tensor):
+        x, z, t = x_tensor[:, 0:1], x_tensor[:, 1:2], x_tensor[:, 2:3]
+        out = self.net(x_tensor)
         
-        u1_raw, u3_raw, phi_raw = raw_out[:, 0:1], raw_out[:, 1:2], raw_out[:, 2:3]
+        D_bc = x * (1 - x) * z * (1 - z) * (t**2)
         
-        # Exact Topological Constraint: D_bc(x1, x3) * t^2
-        D_bc = x1 * (1.0 - x1) * x3 * (1.0 - x3)
-        topology = D_bc * (t ** 2)
-        
-        u1_hat = topology * u1_raw
-        u3_hat = topology * u3_raw
-        phi_hat = topology * phi_raw
-        
-        return u1_hat, u3_hat, phi_hat
+        return D_bc * out[:, 0:1], D_bc * out[:, 1:2], D_bc * out[:, 2:3]
