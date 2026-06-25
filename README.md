@@ -47,8 +47,3 @@ python MMS-framework/main.py
 ```bash
 python FEM-framework/main.py
 ```
-
-**3. To run the Automated SNR Sensitivity Sweep (40 dB to 0 dB):**
-```bash
-python FEM-framework/snr_sweep.py
-```
