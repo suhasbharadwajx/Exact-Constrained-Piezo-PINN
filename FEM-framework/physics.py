@@ -1,6 +1,16 @@
 import torch
 import numpy as np
 
+# Material physical parameters (PZT-5H)
+e33_SI = 23.3
+true_e15_SI = 17.0
+
+L_ref = 0.01
+t_ref = 5.71e-6
+U_ref = 1e-9
+Phi_ref = 1.0
+
+# Dimensionless tensor ratios
 c0_ref, e0_ref, eps0_ref = 2.3e10, 23.3, 1.30e-8
 k0_sq = (e0_ref**2) / (c0_ref * eps0_ref)
 

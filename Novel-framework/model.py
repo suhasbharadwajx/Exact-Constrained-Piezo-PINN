@@ -1,3 +1,6 @@
+This script contains the core architecture, explicitly enforcing your novel $\mathcal{D}_{bc} \cdot t^2$ constraint in the forward pass.
+
+```python
 import torch
 import torch.nn as nn
 
