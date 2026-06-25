@@ -219,3 +219,5 @@ __marimo__/
 
 data/*
 !data/.gitkeep
+!data/Raw-FEM-Dataset.txt
+!data/Noisy-FEM-Dataset.csv
