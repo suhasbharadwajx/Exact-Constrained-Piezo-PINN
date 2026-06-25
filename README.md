@@ -19,7 +19,7 @@ Coupled with a rigorous asymptotic dimensional stabilization scheme, the code ex
 * `main.py`: Orchestrates the PDE residuals, computes the loss, and runs the baseline optimization pipeline against the exact synthetic data.
 
 ### 2. `data/` (COMSOL FE Wavefields)
-* `comsol_pinn_dataset.csv`: The independent transient wavefield dataset extracted from a COMSOL Multiphysics solid mechanics and electrostatics simulation. Contains both the pristine (`_true`) field data and the 30 dB additive Gaussian noise (`_noisy`) target fields.
+* `Noisy-FEM-Dataset.csv`: The independent transient wavefield dataset extracted from a COMSOL Multiphysics solid mechanics and electrostatics simulation. Contains both the pristine (`_true`) field data and the 30 dB additive Gaussian noise (`_noisy`) target fields.
 
 ### 3. `fem_study/` (Cross-Validation & Noise Analysis)
 * `fem_inversion.py`: Applies the constrained architecture to the 30 dB noisy COMSOL data to extract $e_{15}$ under realistic measurement and FEM discretization errors.
