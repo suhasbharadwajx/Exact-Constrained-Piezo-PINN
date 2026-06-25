@@ -12,7 +12,6 @@ torch.manual_seed(42)
 np.random.seed(42)
 torch.set_default_dtype(torch.float32)
 
-print(f"--- 2D NDE PARAMETER DISCOVERY ---")
 print(f"Target e15 to Discover: {true_e15:.5f}\n")
 
 model = PiezoInversePINN().to(device)
