@@ -3,255 +3,234 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from torch.optim.lr_scheduler import CosineAnnealingLR
-import gc
-import os
-
+import time
 from physics import *
-from model import PiezoInversePINN
+from model import ConstrainedPINN
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 torch.manual_seed(42)
 np.random.seed(42)
 torch.set_default_dtype(torch.float32)
 
-print(f"Target e15 to Discover: {true_e15_SI:.5f} C/m^2\n")
+df = pd.read_csv("Raw-FEM-Dataset.txt", delim_whitespace=True, header=None)
 
-model = PiezoInversePINN().to(device)
+x_raw = df.iloc[:, 0].values
+x_coords = (x_raw - x_raw.min()) / (x_raw.max() - x_raw.min()) 
+z_coords = np.full_like(x_coords, 0.9)
 
-# FEM Data
-script_dir = os.path.dirname(os.path.abspath(__file__))
-file_path = os.path.join(script_dir, "..", "data", "Noisy-FEM-Dataset.csv")
+u_data_raw = df.iloc[:, 1::3].values 
+v_data_raw = df.iloc[:, 2::3].values 
+phi_data_raw = df.iloc[:, 3::3].values 
 
-if not os.path.exists(file_path):
-    raise FileNotFoundError(f"Dataset missing: {os.path.abspath(file_path)}\n"
-                            f"Please ensure 'Noisy-FEM-Dataset.csv' is placed inside the 'data/' directory.")
+n_nodes = u_data_raw.shape[0]
+n_time_steps = u_data_raw.shape[1]
 
-print(f"Loading FEM dataset from: {os.path.abspath(file_path)}")
-df_clean = pd.read_csv(file_path)
+u_data = u_data_raw * 1e6
+v_data = v_data_raw * 1e6
+phi_data = phi_data_raw / Phi_ref
 
-X_true = df_clean[["x", "y", "t"]].values.astype(np.float32)
+t_physical = np.linspace(0, 5.0e-6, n_time_steps)
+t_array = t_physical / t_ref 
 
-Y_noisy = df_clean[["u_noisy", "v_noisy", "phi_noisy"]].values.astype(np.float32)
-t_bar_max = float(df_clean["t"].max() / t_ref)
+X_grid, T_grid = np.meshgrid(x_coords, t_array, indexing='ij')
+Z_grid = np.full_like(X_grid, 0.9) 
 
-X_sensor = torch.tensor(X_true, dtype=torch.float32, device=device) / torch.tensor([L_ref, L_ref, t_ref], device=device)
-Y_sensor = torch.tensor(Y_noisy, dtype=torch.float32, device=device) / torch.tensor([U_ref, U_ref, Phi_ref], device=device)
-N_sensors = X_sensor.shape[0]
+X_sensor_np = np.hstack([X_grid.reshape(-1, 1), Z_grid.reshape(-1, 1), T_grid.reshape(-1, 1)])
+U_clean_np = np.hstack([u_data.reshape(-1, 1), v_data.reshape(-1, 1), phi_data.reshape(-1, 1)])
+
+def add_awgn(signal, snr_db=30):
+    sig_power = np.mean(signal**2)
+    if sig_power == 0: return signal
+    noise_power = sig_power / (10 ** (snr_db / 10))
+    noise = np.random.normal(0, np.sqrt(noise_power), signal.shape)
+    return signal + noise
+
+U_noisy_np = np.zeros_like(U_clean_np)
+U_noisy_np[:, 0] = add_awgn(U_clean_np[:, 0], snr_db=30)
+U_noisy_np[:, 1] = add_awgn(U_clean_np[:, 1], snr_db=30)
+U_noisy_np[:, 2] = add_awgn(U_clean_np[:, 2], snr_db=30)
+
+X_sensor = torch.tensor(X_sensor_np, dtype=torch.float32, device=device)
+U_sensor = torch.tensor(U_noisy_np, dtype=torch.float32, device=device)
+N_sensor = X_sensor.shape[0]
+
+model = ConstrainedPINN().to(device)
+
+def compute_loss(model, X_colloc, X_sens_batch, U_sens_batch):
+    x_g = X_colloc[:, 0:1].clone().requires_grad_(True)
+    z_g = X_colloc[:, 1:2].clone().requires_grad_(True)
+    t_g = X_colloc[:, 2:3].clone().requires_grad_(True)
+    x_tensor = torch.cat([x_g, z_g, t_g], dim=1)
+    
+    u1, u3, phi = model(x_tensor)
+    
+    u1_t = torch.autograd.grad(u1.sum(), t_g, create_graph=True)[0]
+    u1_tt = torch.autograd.grad(u1_t.sum(), t_g, create_graph=True)[0]
+    u1_x = torch.autograd.grad(u1.sum(), x_g, create_graph=True)[0]
+    u1_xx = torch.autograd.grad(u1_x.sum(), x_g, create_graph=True)[0]
+    u1_z = torch.autograd.grad(u1.sum(), z_g, create_graph=True)[0]
+    u1_zz = torch.autograd.grad(u1_z.sum(), z_g, create_graph=True)[0]
+    u1_xz = torch.autograd.grad(u1_x.sum(), z_g, create_graph=True)[0]
+    
+    u3_t = torch.autograd.grad(u3.sum(), t_g, create_graph=True)[0]
+    u3_tt = torch.autograd.grad(u3_t.sum(), t_g, create_graph=True)[0]
+    u3_x = torch.autograd.grad(u3.sum(), x_g, create_graph=True)[0]
+    u3_xx = torch.autograd.grad(u3_x.sum(), x_g, create_graph=True)[0]
+    u3_z = torch.autograd.grad(u3.sum(), z_g, create_graph=True)[0]
+    u3_zz = torch.autograd.grad(u3_z.sum(), z_g, create_graph=True)[0]
+    u3_xz = torch.autograd.grad(u3_x.sum(), z_g, create_graph=True)[0]
+    
+    phi_x = torch.autograd.grad(phi.sum(), x_g, create_graph=True)[0]
+    phi_xx = torch.autograd.grad(phi_x.sum(), x_g, create_graph=True)[0]
+    phi_z = torch.autograd.grad(phi.sum(), z_g, create_graph=True)[0]
+    phi_zz = torch.autograd.grad(phi_z.sum(), z_g, create_graph=True)[0]
+    phi_xz = torch.autograd.grad(phi_x.sum(), z_g, create_graph=True)[0]
+    
+    f1_true, f3_true, q_true = get_analytical_forces(x_g, z_g, t_g)
+    e15_p = model.e15_pred
+    
+    res_1 = u1_tt - c11*u1_xx - u1_zz - (c13+1)*u3_xz - k0_sq*(e31+e15_p)*phi_xz - f1_true
+    res_3 = u3_tt - u3_xx - c33*u3_zz - (c13+1)*u1_xz - k0_sq*e15_p*phi_xx - k0_sq*phi_zz - f3_true
+    res_phi = (e15_p+e31)*u1_xz + e15_p*u3_xx + u3_zz - eps11*phi_xx - phi_zz - q_true
+    
+    L_PDE = (res_1**2).mean() + (res_3**2).mean() + (res_phi**2).mean()
+    
+    u1_s, u3_s, phi_s = model(X_sens_batch)
+    L_Data = ((u1_s - U_sens_batch[:, 0:1])**2).mean() + \
+             ((u3_s - U_sens_batch[:, 1:2])**2).mean() + \
+             ((phi_s - U_sens_batch[:, 2:3])**2).mean()
+             
+    return L_PDE, L_Data
 
 N_colloc = 25000
 X_domain = torch.rand(N_colloc, 3, device=device)
-X_domain[:, 2] *= t_bar_max
+X_domain[:, 2] = X_domain[:, 2] * 0.875
 
-f1_mms, f3_mms, f_phi_mms = generate_mms_forcing(X_domain)
-
-def compute_loss(X_b, f1_b, f3_b, f_phi_b, X_s, Y_s, return_components=False):
-    X_g = X_b.clone().detach().requires_grad_(True)
-    u1, u3, phi = model(X_g)
-    
-    u1_x, u1_z, u1_t = torch.autograd.grad(u1.sum(), X_g, create_graph=True)[0].split(1, dim=1)
-    u3_x, u3_z, u3_t = torch.autograd.grad(u3.sum(), X_g, create_graph=True)[0].split(1, dim=1)
-    phi_x, phi_z, _ = torch.autograd.grad(phi.sum(), X_g, create_graph=True)[0].split(1, dim=1)
-    
-    u1_xx = torch.autograd.grad(u1_x.sum(), X_g, create_graph=True)[0][:, 0:1]
-    u1_zz = torch.autograd.grad(u1_z.sum(), X_g, create_graph=True)[0][:, 1:2]
-    u1_xz = torch.autograd.grad(u1_x.sum(), X_g, create_graph=True)[0][:, 1:2]
-    u1_tt = torch.autograd.grad(u1_t.sum(), X_g, create_graph=True)[0][:, 2:3]
-    
-    u3_xx = torch.autograd.grad(u3_x.sum(), X_g, create_graph=True)[0][:, 0:1]
-    u3_zz = torch.autograd.grad(u3_z.sum(), X_g, create_graph=True)[0][:, 1:2]
-    u3_xz = torch.autograd.grad(u3_x.sum(), X_g, create_graph=True)[0][:, 1:2]
-    u3_tt = torch.autograd.grad(u3_t.sum(), X_g, create_graph=True)[0][:, 2:3]
-    
-    phi_xx = torch.autograd.grad(phi_x.sum(), X_g, create_graph=True)[0][:, 0:1]
-    phi_zz = torch.autograd.grad(phi_z.sum(), X_g, create_graph=True)[0][:, 1:2]
-    phi_xz = torch.autograd.grad(phi_x.sum(), X_g, create_graph=True)[0][:, 1:2]
-    
-    e15_p = model.e15_pred
-    
-    r_u1 = u1_tt - (c11*u1_xx + c44*u1_zz + (c13+c44)*u3_xz + k0_sq*(true_e31+e15_p)*phi_xz) - f1_b
-    r_u3 = u3_tt - (c44*u3_xx + c33*u3_zz + (c13+c44)*u1_xz + k0_sq*e15_p*phi_xx + k0_sq*true_e33*phi_zz) - f3_b
-    r_phi = (e15_p+true_e31)*u1_xz + e15_p*u3_xx + true_e33*u3_zz - eps11*phi_xx - eps33*phi_zz - f_phi_b
-    
-    L_pde = (r_u1**2).mean() + (r_u3**2).mean() + (r_phi**2).mean()
-    
-    u1_s, u3_s, phi_s = model(X_s)
-    L_data = ((u1_s - Y_s[:, 0:1])**2).mean() + ((u3_s - Y_s[:, 1:2])**2).mean() + ((phi_s - Y_s[:, 2:3])**2).mean()
-    
-    total_loss = L_pde + 5000.0 * L_data
-    
-    if return_components:
-        return total_loss, L_pde, L_data
-    return total_loss
-
-batch_size = 5000
-e15_hist, loss_pde_hist, loss_data_hist = [], [], []
-
-print("\nSTAGE 1: Adam Optimizer (15,000 Epochs)")
 opt_adam = torch.optim.Adam(model.parameters(), lr=1e-3)
 scheduler = CosineAnnealingLR(opt_adam, T_max=15000, eta_min=1e-5)
 
+pde_hist = []
+data_hist = []
+e15_hist = []
+
 for ep in range(15000):
-    idx_b = torch.randperm(N_colloc)[:batch_size]
-    idx_s = torch.randperm(N_sensors)[:batch_size]
-    
-    X_b = X_domain[idx_b]
-    f1_b, f3_b, f_phi_b = f1_mms[idx_b], f3_mms[idx_b], f_phi_mms[idx_b]
-    X_s, Y_s = X_sensor[idx_s], Y_sensor[idx_s]
-    
+    model.train()
     opt_adam.zero_grad()
-    loss, L_p, L_d = compute_loss(X_b, f1_b, f3_b, f_phi_b, X_s, Y_s, return_components=True)
+    
+    idx_pde = torch.randperm(N_colloc)[:5000]
+    idx_sens = torch.randperm(N_sensor)[:2000]
+    
+    L_pde, L_data = compute_loss(model, X_domain[idx_pde], X_sensor[idx_sens], U_sensor[idx_sens])
+    
+    loss = L_pde + 5000.0 * L_data
     loss.backward()
-    torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
     opt_adam.step()
     scheduler.step()
     
-    e15_hist.append(model.e15_pred.item())
-    loss_pde_hist.append(L_p.item())
-    loss_data_hist.append(L_d.item())
+    pde_hist.append(L_pde.item())
+    data_hist.append(L_data.item())
+    e15_hist.append(model.e15_pred.item() * e33_SI)
 
-    if (ep + 1) % 1500 == 0:
-        print(f"Epoch {ep+1:5d} | e15 = {model.e15_pred.item()*e33_SI:.5f} (True: {true_e15_SI:.5f})")
+opt_lbfgs = torch.optim.LBFGS(model.parameters(), max_iter=1250, tolerance_grad=1e-7, tolerance_change=1e-9, line_search_fn="strong_wolfe")
 
-gc.collect()
-torch.cuda.empty_cache()
+X_colloc_lbfgs = X_domain[:15000]
+idx_sens_lbfgs = torch.randperm(N_sensor)[:5000]
+X_sens_lbfgs = X_sensor[idx_sens_lbfgs]
+U_sens_lbfgs = U_sensor[idx_sens_lbfgs]
 
-print("\nSTAGE 2: L-BFGS Micro-Curvature Polish")
-opt_lbfgs = torch.optim.LBFGS(
-    model.parameters(), lr=0.1, max_iter=1000, history_size=100, 
-    line_search_fn='strong_wolfe', tolerance_grad=1e-13, tolerance_change=1e-13
-)
-
-X_lbfgs = X_domain[:15000]
-f1_lbfgs, f3_lbfgs, f_phi_lbfgs = f1_mms[:15000], f3_mms[:15000], f_phi_mms[:15000]
-X_s_lbfgs, Y_s_lbfgs = X_sensor[:15000], Y_sensor[:15000]
-
-lbfgs_iter = 0
 def closure():
-    global lbfgs_iter
     opt_lbfgs.zero_grad()
-    loss, L_p, L_d = compute_loss(X_lbfgs, f1_lbfgs, f3_lbfgs, f_phi_lbfgs, X_s_lbfgs, Y_s_lbfgs, return_components=True)
+    L_pde, L_data = compute_loss(model, X_colloc_lbfgs, X_sens_lbfgs, U_sens_lbfgs)
+    loss = L_pde + 5000.0 * L_data
     loss.backward()
-    lbfgs_iter += 1
     
-    e15_hist.append(model.e15_pred.item())
-    loss_pde_hist.append(L_p.item())
-    loss_data_hist.append(L_d.item())
-        
-    if lbfgs_iter % 25 == 0:
-        print(f"L-BFGS iter {lbfgs_iter:3d} | Loss = {loss.item():.6e} | e15 = {model.e15_pred.item()*e33_SI:.5f}")
+    pde_hist.append(L_pde.item())
+    data_hist.append(L_data.item())
+    e15_hist.append(model.e15_pred.item() * e33_SI)
+    
     return loss
 
 opt_lbfgs.step(closure)
 
-final_e15_dim = model.e15_pred.item() * e33_SI
-err_margin = abs(final_e15_dim - true_e15_SI)/true_e15_SI * 100
-print(f"\nFINAL DISCOVERED e15: {final_e15_dim:.5f} C/m^2 (Target: {true_e15_SI:.5f})")
-print(f"Discovery Error: {err_margin:.4f}%\n")
+total_steps = list(range(len(pde_hist)))
 
-with torch.no_grad():
-    u1_p, u3_p, phi_p = model(X_sensor)
-    u1_p = (u1_p * U_ref).cpu().numpy().flatten()
-    u3_p = (u3_p * U_ref).cpu().numpy().flatten()
-    phi_p = (phi_p * Phi_ref).cpu().numpy().flatten()
-    
-    # Isolate original FEM fields to evaluate true L2 error of the reconstruction
-    u1_t = df_clean["u_true"].values.astype(np.float32)
-    u3_t = df_clean["v_true"].values.astype(np.float32)
-    phi_t = df_clean["phi_true"].values.astype(np.float32)
-    
-    def rel_l2(pred, true):
-        return np.linalg.norm(pred - true) / max(np.linalg.norm(true), 1e-30)
+plt.rcParams.update({'font.size': 12, 'font.family': 'DejaVu Sans'})
 
-    print("Reconstruction error vs. NOISE-FREE COMSOL fields (Full Domain):")
-    print(f"  u1  relative L2 error: {rel_l2(u1_p, u1_t):.4e}")
-    print(f"  u3  relative L2 error: {rel_l2(u3_p, u3_t):.4e}")
-    print(f"  phi relative L2 error: {rel_l2(phi_p, phi_t):.4e}\n")
+model.eval()
 
-print("Generating publication graphics from memory (No Normalization)...")
-plt.rcParams.update({'font.size': 12})
-
-res = 100
-x_l = np.linspace(0.0, 1.0, res)
-z_l = np.linspace(0.0, 1.0, res)
+res = 200 
+x_l = np.linspace(0, 1, res)
+z_l = np.linspace(0, 1, res)
 X_g, Z_g = np.meshgrid(x_l, z_l)
 
-t_plot_bar = t_bar_max * 0.5 
-pts_norm = np.hstack([X_g.flatten()[:, None], Z_g.flatten()[:, None], np.full((res ** 2, 1), t_plot_bar)])
-grid_tensor = torch.tensor(pts_norm, dtype=torch.float32, device=device)
+t_snapshot_dimensional = 5.0e-6
+t_snapshot_normalized = t_snapshot_dimensional / t_ref
+
+pts = np.hstack([X_g.flatten()[:, None], 
+                 Z_g.flatten()[:, None], 
+                 np.full((res**2, 1), t_snapshot_normalized)])
+grid_tensor = torch.tensor(pts, dtype=torch.float32, device=device)
 
 with torch.no_grad():
-    _, u3_plot, phi_plot = model(grid_tensor)
-    u3_plot_norm = u3_plot.cpu().numpy().reshape(res, res)
-    u3_slice_SI = (u3_plot * U_ref).cpu().numpy().reshape(res, res)
-    phi_slice_SI = (phi_plot * Phi_ref).cpu().numpy().reshape(res, res)
+    u1_pred, u3_pred, phi_pred = model(grid_tensor)
+    
+    u3_dimensional = (u3_pred.cpu().numpy().reshape(res, res) * U_ref) * 1e12 
+    phi_dimensional = (phi_pred.cpu().numpy().reshape(res, res) * Phi_ref)    
+    
+X_g_mm = X_g * 10.0
+Z_g_mm = Z_g * 10.0
+z_l_mm = z_l * 10.0
 
-fig = plt.figure(figsize=(18, 10), dpi=200)
+fig = plt.figure(figsize=(18, 11), dpi=300)
 
-# Panel 1: Wave Contour
 ax1 = plt.subplot(2, 2, 1)
-vmin = np.min(u3_plot_norm)
-vmax = np.max(u3_plot_norm)
-c1 = ax1.contourf(X_g * L_ref * 1000, Z_g * L_ref * 1000, u3_plot_norm, levels=100, cmap="RdBu_r", vmin=vmin, vmax=vmax)
-ax1.set_title(rf"Displacement $\bar{{u}}_3$ (High Contrast)")
+vmax = np.max(np.abs(u3_dimensional))
+c1 = ax1.contourf(X_g_mm, Z_g_mm, u3_dimensional, levels=60, cmap='RdBu_r', vmin=-vmax, vmax=vmax)
+ax1.set_title(r"Predicted Displacement $u_3$ at $t = 5.0 \mu s$")
 ax1.set_xlabel("Domain $x_1$ (mm)")
 ax1.set_ylabel("Domain $x_3$ (mm)")
-fig.colorbar(c1, ax=ax1, format="%.2e")
+cbar = fig.colorbar(c1, ax=ax1)
+cbar.set_label("Raw Displacement (pm)")
 
-# Panel 2: Mid-Slice Profiles
 ax2 = plt.subplot(2, 2, 2)
-slice_idx = res // 2
+slice_idx = int(res * 0.125)
 
-u3_raw = u3_slice_SI[:, slice_idx] * 1e12  
-phi_raw = phi_slice_SI[:, slice_idx]       
-
-color1 = 'blue'
+line1 = ax2.plot(z_l_mm, u3_dimensional[:, slice_idx], 'b-', linewidth=2.5, label=r'Raw Displacement $u_3$')
 ax2.set_xlabel("Domain $x_3$ (mm)")
-ax2.set_ylabel(r"Raw Displacement $u_3$ (pm)", color=color1)
-l1, = ax2.plot(z_l * L_ref * 1000, u3_raw, color=color1, linestyle="-", linewidth=2, label=r"Raw $u_3$ (pm)")
-ax2.tick_params(axis='y', labelcolor=color1)
+ax2.set_ylabel(r"Raw Displacement $u_3$ (pm)", color='b', weight='bold')
+ax2.tick_params(axis='y', labelcolor='b')
 ax2.grid(True, alpha=0.3)
 
-max_u3 = np.max(np.abs(u3_raw))
-ax2.set_ylim(-1.2 * max_u3, 1.2 * max_u3)
-
 ax2_twin = ax2.twinx()
-color2 = 'red'
-ax2_twin.set_ylabel(r"Raw Electric Potential $\phi$ (V)", color=color2)
-l2, = ax2_twin.plot(z_l * L_ref * 1000, phi_raw, color=color2, linestyle="--", linewidth=2, label=r"Raw $\phi$ (V)")
-ax2_twin.tick_params(axis='y', labelcolor=color2)
+line2 = ax2_twin.plot(z_l_mm, phi_dimensional[:, slice_idx], 'r--', linewidth=2.5, label=r'Raw Electric Potential $\phi$')
+ax2_twin.set_ylabel(r"Raw Electric Potential $\phi$ (V)", color='r', weight='bold')
+ax2_twin.tick_params(axis='y', labelcolor='r')
 
-max_phi = np.max(np.abs(phi_raw))
-ax2_twin.set_ylim(-1.2 * max_phi, 1.2 * max_phi)
+lines = line1 + line2
+labels = [l.get_label() for l in lines]
+ax2.legend(lines, labels, loc="lower left", framealpha=0.9)
+ax2.set_title(r"Coupled Electromechanical Response ($x_1 = 1.25$ mm)")
 
-lines = [l1, l2]
-labels = [line.get_label() for line in lines]
-ax2.legend(lines, labels, loc="lower right")
-ax2.set_title("Coupled Electromechanical Response (Raw Scale)")
-
-# Panel 3: Loss Dynamics
 ax3 = plt.subplot(2, 2, 3)
-ax3.plot(loss_pde_hist, color="teal", alpha=0.8, label=r"$\mathcal{L}_{PDE}$")
-ax3.plot(loss_data_hist, color="orange", alpha=0.8, label=r"$\mathcal{L}_{Data}$")
+ax3.plot(total_steps, pde_hist, color="#1f77b4", alpha=0.8, linewidth=2, label=r"$\mathcal{L}_{PDE}$")
+ax3.plot(total_steps, data_hist, color="#ff7f0e", alpha=0.8, linewidth=2, label=r"$\mathcal{L}_{Data}$")
+ax3.axvline(x=15000, color='gray', linestyle='--', alpha=0.7, label="L-BFGS Transition")
+
 ax3.set_yscale("log")
-ax3.set_title("Loss Dynamics (Adam + L-BFGS)")
+ax3.set_title("Constrained Loss Dynamics (Adam + L-BFGS)")
 ax3.set_xlabel("Optimization Steps")
 ax3.set_ylabel("Log Loss")
-ax3.grid(True, alpha=0.3)
-ax3.legend()
+ax3.grid(True, alpha=0.3, which="both", ls="--")
+ax3.legend(loc="upper right", framealpha=0.9)
 
-# Panel 4: Parameter Trajectory
 ax4 = plt.subplot(2, 2, 4)
-total_steps = list(range(len(e15_hist)))
-e15_dim_hist = [v * e33_SI for v in e15_hist]
-ax4.plot(total_steps, e15_dim_hist, color="blue", linewidth=2, label=r"PINN $e_{15}$ Trajectory")
-ax4.axhline(y=true_e15_SI, color="green", linestyle="--", linewidth=2, label=f"True $e_{{15}}$ = {true_e15_SI}")
+ax4.plot(total_steps, e15_hist, color="indigo", linewidth=2.5, label=r"PINN $e_{15}$ Trajectory")
+ax4.axhline(y=17.0, color="crimson", linestyle="--", linewidth=2.5, label=r"True Target $e_{15} = 17.0$")
 ax4.set_title("Inverse Discovery of Shear Piezoelectric Coupling")
 ax4.set_xlabel("Optimization Steps")
 ax4.set_ylabel(r"$e_{15}$ (C/m$^2$)")
 ax4.grid(True, alpha=0.3)
-ax4.legend(loc="lower right")
+ax4.legend(loc="lower right", framealpha=0.9)
 
-plt.tight_layout()
-plt.savefig("PRA_Manuscript_Graphics_FEM.png", format="png", bbox_inches="tight")
-plt.show()
-print("\nGraphics successfully saved to 'PRA_Manuscript_Graphics_FEM.png'.")
+plt.tight_layout(pad=2.0)
+plt.savefig("Figure_5_FEM_CrossValidation.png", format="png", dpi=300, bbox_inches="tight")
