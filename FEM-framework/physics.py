@@ -17,6 +17,7 @@ c33 = 11.7 / 2.3
 e31 = -6.5 / 23.3
 eps11 = 1.503 / 1.300
 k0_sq = (e33_SI**2) / (c44_SI * eps33_SI)
+
 true_e15_dimless = true_e15_SI / e33_SI
 
 def get_analytical_forces(x, z, t):
@@ -39,19 +40,19 @@ def get_analytical_forces(x, z, t):
     u1_tt = A1 * C_tt * sin2x * sin4z
     u1_xx = -A1 * C_t * (K**2) * sin2x * sin4z
     u1_zz = -A1 * C_t * ((2*K)**2) * sin2x * sin4z
-    u1_xz = A1 * C_t * K * (2*K) * cos2x * cos4z
+    u1_xz =  A1 * C_t * K * (2*K) * cos2x * cos4z
     
     u3_tt = A3 * C_tt * sin4x * sin2z
     u3_xx = -A3 * C_t * ((2*K)**2) * sin4x * sin2z
     u3_zz = -A3 * C_t * (K**2) * sin4x * sin2z
-    u3_xz = A3 * C_t * (2*K) * K * cos4x * cos2z
+    u3_xz =  A3 * C_t * (2*K) * K * cos4x * cos2z
     
     phi_xx = -Aphi * C_t * (K**2) * sin2x * sin2z
     phi_zz = -Aphi * C_t * (K**2) * sin2x * sin2z
-    phi_xz = Aphi * C_t * K * K * cos2x * cos2z
+    phi_xz =  Aphi * C_t * K * K * cos2x * cos2z
     
     f1 = u1_tt - c11*u1_xx - u1_zz - (c13+1)*u3_xz - k0_sq*(e31+true_e15_dimless)*phi_xz
     f3 = u3_tt - u3_xx - c33*u3_zz - (c13+1)*u1_xz - k0_sq*true_e15_dimless*phi_xx - k0_sq*phi_zz
-    q = (true_e15_dimless+e31)*u1_xz + true_e15_dimless*u3_xx + u3_zz - eps11*phi_xx - phi_zz
+    q  = (true_e15_dimless+e31)*u1_xz + true_e15_dimless*u3_xx + u3_zz - eps11*phi_xx - phi_zz
     
     return f1, f3, q
