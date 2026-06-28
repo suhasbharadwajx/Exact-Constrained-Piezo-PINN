@@ -14,6 +14,7 @@ class ConstrainedPINN(nn.Module):
             nn.Linear(150, 150), nn.Tanh(),
             nn.Linear(150, 3)
         )
+        
         self.e15_pred = nn.Parameter(torch.tensor([0.10], dtype=torch.float32)) 
         
         for m in self.modules():
