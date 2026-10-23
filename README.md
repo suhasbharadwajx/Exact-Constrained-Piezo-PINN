@@ -4,7 +4,7 @@
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.0%2B-ee4c2c.svg)](https://pytorch.org/)
 
 Official code repository for the manuscript:
-**"Exact Spatio-Temporal Constraints to Eliminate Initial-State Electrostatic Inconsistencies in Inverse Piezoelectric Tensor Identification"** *(Submitted to Physical Review Applied)*
+**"Exact Boundary and Initial Constraints for Physics-Informed Identification of the Shear Piezoelectric Coefficient from Sparse Noisy Wavefield Data"** *(Submitted to Physical Review Applied)*
 
 ## Overview
 This repository implements a Physics-Informed Neural Network (PINN) designed to solve stiff, strongly coupled electro-elastodynamics. By applying an exact $t^2$ temporal multiplier and a spatial distance function ($\mathcal{D}_{bc}$) directly to the neural network topology, the architecture completely bypasses the initial-state electrostatic inconsistencies inherent to unconstrained soft-penalty formulations. 
