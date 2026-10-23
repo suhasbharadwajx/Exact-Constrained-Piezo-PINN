@@ -9,7 +9,7 @@ Official code repository for the manuscript:
 ## Overview
 This repository implements a Physics-Informed Neural Network (PINN) designed to solve stiff, strongly coupled electro-elastodynamics. By applying an exact $t^2$ temporal multiplier and a spatial distance function ($\mathcal{D}_{bc}$) directly to the neural network topology, the architecture completely bypasses the initial-state electrostatic inconsistencies inherent to unconstrained soft-penalty formulations. 
 
-Coupled with a rigorous asymptotic dimensional stabilization scheme, the code executes a two-stage (Adam $\rightarrow$ L-BFGS) inverse discovery pipeline to successfully isolate the dimensionless $e_{15}$ shear piezoelectric parameter of a PZT-5H medium. The repository is modularized into two primary frameworks: an exact Method of Manufactured Solutions (MMS) verification, and a discrete numerical cross-validation against noisy COMSOL Multiphysics FE data. To rigorously prevent deceptive optimization shortcuts, both studies evaluate the network against a highly asymmetric, 8-lobe non-polynomial $[1-\cos(2\pi t)]$ transient wavefield.
+Along with a rigorous asymptotic dimensional stabilization scheme, the code executes a two-stage (Adam $\rightarrow$ L-BFGS) inverse discovery pipeline to successfully isolate the dimensionless $e_{15}$ shear piezoelectric parameter of a PZT-5H medium. The repository is spilt into two primary frameworks: an exact Method of Manufactured Solutions (MMS) verification, and a discrete numerical cross-validation against noisy COMSOL Multiphysics FE data. To rigorously prevent deceptive optimization shortcuts, both studies evaluate the network against a highly asymmetric, 8-lobe non-polynomial $[1-\cos(2\pi t)]$ transient wavefield.
 
 ## Repository Structure
 
