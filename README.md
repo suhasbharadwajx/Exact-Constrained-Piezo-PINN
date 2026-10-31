@@ -49,6 +49,12 @@ This directory trains four constrained variants on the same seeds and data as `B
   * **C4**: Temporal factor $`t^2`$ only, with a soft boundary penalty of weight 5000.
   * Each Adam step draws a minibatch of 5,000 collocation points from the 25,000-point pool and uses all 5,000 observations, so these runs use minibatches whereas `Baseline/` uses the full batch.
 
+### 6. `Extended-validation/` (Displacement-only observations and field accuracy)
+This directory retrains the constrained network with the potential removed from the data loss, so that only noisy $`u_1`$ and $`u_3`$ are observed, and checks the recovered fields on the FEM data.
+* **`physics.py`** and **`model.py`**: the same constants, manufactured wavefield, and constrained network as in the other folders.
+* **`main.py`**: runs `FEM-all` (seed 42 and seeds 1 to 5), `FEM-disp` (seeds 1 to 5), and `MMS-disp` (seeds 1 to 5), appends one row per run to `Extended-Results.csv`, saves the histories in `Extended-Runs/`, writes `Extended-Summary.txt`, and draws the figures. Start one worker per GPU with `python main.py 0 2` and `python main.py 1 2`. Finished runs are skipped on restart. The FEM data are read from `FEM-Dataset.txt`, or from `FEM-Dataset.txt.zip` in this folder, in `../FEM-framework`, or in `../SNR-sweep`.
+* The FEM runs follow `FEM-framework/main.py` and the MMS runs follow arm C1 of `Ablation-study/main.py` with the same seeds, so the only change is the missing $`\phi`$ term. Put `Ablation-Results.csv` next to `main.py` to get the seed-by-seed comparison with C1 in the summary.
+
 ## Requirements
 * Python 3.9+
 * PyTorch 2.0+ (Utilizes TF32 hardware acceleration)
